@@ -2,6 +2,7 @@
 """
 Simple HTTP server for CMS Bid Price Comparison Tool using only built-in Python modules
 Enhanced with MAC Value Analysis using Milliman MACVAT methodology
+Now includes extensive debug logging for troubleshooting MAC score calculations
 """
 
 import http.server
@@ -60,18 +61,34 @@ def calculate_mac_value(plan, market_data=None):
     Formula: Total value added = Part C benefit value + Part D benefit value + Part B premium buydown – total member (C + D) premium
     """
     try:
+        # Debug logging - print input plan data
+        contract_number = plan.get('contract_number', 'Unknown')
+        organization = plan.get('organization', 'Unknown')
+        
+        print(f"\n=== MAC CALCULATION DEBUG for {organization} ({contract_number}) ===")
+        print(f"Input plan keys: {list(plan.keys())}")
+        
         # Core MACVAT components (all in PMPM)
         part_c_premium = (plan.get('part_c_premium', 0) or 0)
         part_d_premium = (plan.get('part_d_premium', 0) or 0)
         total_member_premium = part_c_premium + part_d_premium
         
+        print(f"Part C Premium: {part_c_premium}")
+        print(f"Part D Premium: {part_d_premium}")
+        print(f"Total Member Premium: {total_member_premium}")
+        
         # Estimate Part B premium buydown (if plan covers it)
         part_b_buydown = plan.get('part_b_buydown', 0) or 0  # Usually 0 unless specifically offered
+        print(f"Part B Buydown: {part_b_buydown}")
         
         # Calculate rebate using actual CMS methodology
         benchmark = plan.get('estimated_benchmark', 0) or plan.get('benchmark_0pct', 0) or 0
         estimated_bid = plan.get('estimated_bid', 0) or 0
         star_rating = plan.get('overall_rating', 0) or 0
+        
+        print(f"Benchmark: {benchmark}")
+        print(f"Estimated Bid: {estimated_bid}")
+        print(f"Star Rating: {star_rating}")
         
         # CMS rebate percentage based on star rating
         if star_rating >= 4.5:
@@ -81,24 +98,41 @@ def calculate_mac_value(plan, market_data=None):
         else:
             rebate_percentage = 0.50
             
+        print(f"Rebate Percentage: {rebate_percentage * 100}%")
+        
         # Calculate rebate if bid is below benchmark
         gross_savings = max(0, benchmark - estimated_bid) if benchmark and estimated_bid else 0
         rebate_amount = gross_savings * rebate_percentage
+        
+        print(f"Gross Savings: {gross_savings}")
+        print(f"Rebate Amount: {rebate_amount}")
         
         # Part C benefit value = rebate + supplemental benefits
         supplemental_benefits_annual = plan.get('total_supplemental_value', 0) or 0
         supplemental_benefits_pmpm = supplemental_benefits_annual / 12
         part_c_benefit_value = rebate_amount + supplemental_benefits_pmpm
         
+        print(f"Supplemental Benefits (Annual): {supplemental_benefits_annual}")
+        print(f"Supplemental Benefits (PMPM): {supplemental_benefits_pmpm}")
+        print(f"Part C Benefit Value: {part_c_benefit_value}")
+        
         # Part D benefit value (estimated based on coverage vs. standard)
         # Using simplified approach - in reality this requires detailed Part D benefit analysis
         part_d_benefit_value = rebate_amount * 0.25  # Rough estimate - 25% of rebate allocated to Part D
+        print(f"Part D Benefit Value: {part_d_benefit_value}")
         
         # Apply Milliman MACVAT formula
         total_value_added = (part_c_benefit_value + 
                            part_d_benefit_value + 
                            part_b_buydown - 
                            total_member_premium)
+        
+        print(f"MACVAT Formula:")
+        print(f"  Part C Benefits: {part_c_benefit_value}")
+        print(f"  + Part D Benefits: {part_d_benefit_value}")
+        print(f"  + Part B Buydown: {part_b_buydown}")
+        print(f"  - Member Premiums: {total_member_premium}")
+        print(f"  = Total Value Added: {total_value_added}")
         
         # Convert to 0-100 scale for UI comparison (Milliman reports actual dollar values)
         # Store the raw value for market comparison later
@@ -126,6 +160,9 @@ def calculate_mac_value(plan, market_data=None):
         else:
             normalized_score = 10
         
+        print(f"Normalized MAC Score: {normalized_score}/100")
+        print("=== END MAC CALCULATION DEBUG ===\n")
+        
         return {
             'mac_value': round(normalized_score, 1),
             'value_added_pmpm': round(total_value_added, 2),
@@ -149,6 +186,11 @@ def calculate_mac_value(plan, market_data=None):
         }
         
     except Exception as e:
+        print(f"ERROR in MAC calculation: {str(e)}")
+        print(f"Plan data: {plan}")
+        import traceback
+        traceback.print_exc()
+        
         return {
             'mac_value': 0,
             'value_added_pmpm': 0,
@@ -167,7 +209,7 @@ def calculate_mac_value(plan, market_data=None):
 
 class APIHandler(http.server.BaseHTTPRequestHandler):
     def do_OPTIONS(self):
-        """Handle CORS preflight requests"""
+        \"\"\"Handle CORS preflight requests\"\"\"
         self.send_response(200)
         self.send_header('Access-Control-Allow-Origin', '*')
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
@@ -175,7 +217,7 @@ class APIHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
     
     def do_GET(self):
-        """Handle GET requests"""
+        \"\"\"Handle GET requests\"\"\"
         try:
             # Parse the URL
             parsed_url = urllib.parse.urlparse(self.path)
@@ -190,6 +232,8 @@ class APIHandler(http.server.BaseHTTPRequestHandler):
                     params[key] = value_list
                 else:
                     params[key] = value_list[0] if value_list else ''
+            
+            print(f"API Request: {path} with params: {params}")
             
             # Route requests
             if path == '/api/plans':
@@ -220,19 +264,24 @@ class APIHandler(http.server.BaseHTTPRequestHandler):
             self.send_error(500, f"Internal Server Error: {str(e)}")
     
     def get_db_connection(self):
-        """Get database connection"""
+        \"\"\"Get database connection\"\"\"
         conn = sqlite3.connect(DATABASE_PATH)
         conn.row_factory = sqlite3.Row
         return conn
     
     def get_plans(self, params):
-        """Get Medicare plans with filtering and MAC value calculations"""
+        \"\"\"Get Medicare plans with filtering and MAC value calculations\"\"\"
+        print(f"\\n=== GET_PLANS REQUEST ===")
+        print(f"Params: {params}")
+        
         organization = params.get('organization', '')
         state = params.get('state', '')
         county = params.get('county', '')
         page = int(params.get('page', '1'))
         limit = int(params.get('limit', '50'))
         offset = (page - 1) * limit
+        
+        print(f"Filters: org='{organization}', state='{state}', county='{county}', page={page}, limit={limit}")
         
         conn = self.get_db_connection()
         cursor = conn.cursor()
@@ -265,8 +314,12 @@ class APIHandler(http.server.BaseHTTPRequestHandler):
         query += ' ORDER BY organization_marketing_name, county LIMIT ? OFFSET ?'
         query_params.extend([limit, offset])
         
+        print(f"Executing query with params: {query_params}")
+        
         cursor.execute(query, query_params)
         rows = cursor.fetchall()
+        
+        print(f"Database returned {len(rows)} rows")
         
         plans = []
         for row in rows:
@@ -309,23 +362,33 @@ class APIHandler(http.server.BaseHTTPRequestHandler):
             plans.append(plan_dict)
         
         # Calculate MAC values after we have all plans for market-relative scoring
+        print(f"\\n>>> STARTING MAC CALCULATION SECTION for {len(plans)} plans <<<")
+        
         if plans:
+            print(f"Processing {len(plans)} plans for MAC calculation...")
             raw_mac_data = []
-            for plan in plans:
+            
+            for i, plan in enumerate(plans):
+                print(f"\\nProcessing plan {i+1}/{len(plans)}: {plan.get('organization', 'Unknown')} - {plan.get('contract_number', 'Unknown')}")
                 mac_result = calculate_mac_value(plan, plans)
                 raw_mac_data.append({
                     'plan': plan,
                     'raw_value_added': mac_result['value_added_pmpm'],
                     'mac_result': mac_result
                 })
+                print(f"MAC Result for this plan: {mac_result['mac_value']}/100")
+            
+            print(f"\\nCollected {len(raw_mac_data)} MAC results")
             
             # Calculate market statistics for proper normalization
             value_added_amounts = [data['raw_value_added'] for data in raw_mac_data if data['raw_value_added'] is not None]
+            print(f"Value added amounts for market analysis: {value_added_amounts}")
             
             if value_added_amounts and len(value_added_amounts) > 1:
                 max_value = max(value_added_amounts)
                 min_value = min(value_added_amounts)
                 value_range = max_value - min_value
+                print(f"Market range: {min_value} to {max_value} (range: {value_range})")
                 
                 # Market-relative scoring function
                 def calculate_market_relative_score(value_added):
@@ -348,19 +411,29 @@ class APIHandler(http.server.BaseHTTPRequestHandler):
                     else:
                         return 60
             else:
+                print("Using default scoring (not enough data for market-relative)")
                 def calculate_market_relative_score(value_added):
                     return 60
             
             # Apply market-relative scoring to each plan
+            print("\\nApplying market-relative scoring:")
             for i, data in enumerate(raw_mac_data):
                 mac_result = data['mac_result']
                 market_relative_score = calculate_market_relative_score(data['raw_value_added'])
                 mac_result['mac_value'] = round(market_relative_score, 1)
                 
+                print(f"Plan {i+1}: Raw value {data['raw_value_added']} -> Market score {market_relative_score}")
+                
                 # Add MAC scores to the plan
                 plans[i]['mac_value_scores'] = mac_result
+                
+            print(f">>> COMPLETED MAC CALCULATION SECTION <<<\\n")
+        else:
+            print("No plans found - skipping MAC calculation")
         
         conn.close()
+        print(f"=== RETURNING {len(plans)} plans with MAC scores ===\\n")
+        
         return {
             'status': 'success',
             'count': len(plans),
@@ -368,7 +441,7 @@ class APIHandler(http.server.BaseHTTPRequestHandler):
         }
     
     def get_organizations(self):
-        """Get list of organizations"""
+        \"\"\"Get list of organizations\"\"\"
         conn = self.get_db_connection()
         cursor = conn.cursor()
         
@@ -391,7 +464,7 @@ class APIHandler(http.server.BaseHTTPRequestHandler):
         }
     
     def get_states(self):
-        """Get list of states"""
+        \"\"\"Get list of states\"\"\"
         conn = self.get_db_connection()
         cursor = conn.cursor()
         
@@ -415,7 +488,7 @@ class APIHandler(http.server.BaseHTTPRequestHandler):
         }
     
     def get_counties(self, params):
-        """Get list of counties"""
+        \"\"\"Get list of counties\"\"\"
         state = params.get('state')
         
         conn = self.get_db_connection()
@@ -446,7 +519,7 @@ class APIHandler(http.server.BaseHTTPRequestHandler):
         }
 
     def get_mac_value_analysis(self, params):
-        """Get MAC Value analysis for plans in a market"""
+        \"\"\"Get MAC Value analysis for plans in a market\"\"\"
         state = params.get('state')
         county = params.get('county')
         organizations = params.get('organizations', [])
@@ -454,159 +527,30 @@ class APIHandler(http.server.BaseHTTPRequestHandler):
         if not state:
             return {'error': 'State parameter is required'}
         
-        conn = self.get_db_connection()
-        cursor = conn.cursor()
+        # Use the existing get_plans method for consistency
+        plans_response = self.get_plans({'state': state, 'county': county, 'limit': '1000'})
         
-        # Build query for MAC Value analysis
-        base_query = \"\"\"
-        SELECT 
-            organization_marketing_name as organization,
-            contract_name as plan_name,
-            contract_number,
-            county, 
-            state,
-            plan_type,
-            overall_rating,
-            part_c_rating,
-            part_d_rating,
-            benchmark_5pct as estimated_benchmark,
-            part_c_premium,
-            part_d_premium,
-            total_supplemental_value,
-            ma_eligible_enrollment
-        FROM medicare_plans 
-        WHERE state = ?
-        \"\"\"
+        if plans_response.get('status') != 'success':
+            return {'error': 'Failed to fetch plans'}
         
-        query_params = [state]
+        plans = plans_response.get('plans', [])
         
-        if county:
-            base_query += " AND county = ?"
-            query_params.append(county)
-        
+        # Filter by organizations if specified
         if organizations:
-            placeholders = ','.join(['?' for _ in organizations])
-            base_query += f" AND organization_marketing_name IN ({placeholders})"
-            query_params.extend(organizations)
+            plans = [p for p in plans if p.get('organization') in organizations]
         
-        base_query += " ORDER BY organization_marketing_name"
-        
-        cursor.execute(base_query, query_params)
-        rows = cursor.fetchall()
-        
-        plans = []
-        for row in rows:
-            plan_dict = dict(row)
-            
-            # Calculate financial metrics
-            benchmark = plan_dict['estimated_benchmark'] or 0
-            premium_c = plan_dict.get('part_c_premium', 0) or 0
-            premium_d = plan_dict.get('part_d_premium', 0) or 0
-            supplements = plan_dict.get('total_supplemental_value', 0) or 0
-            
-            total_premium = premium_c + premium_d
-            
-            plan_dict['estimated_bid'] = calculate_estimated_bid(
-                benchmark, 
-                total_premium,
-                supplements
-            )
-            
-            estimated_bid = plan_dict['estimated_bid']
-            plan_dict['rebate'] = max(0, benchmark - estimated_bid) if benchmark and estimated_bid else 0
-            plan_dict['margin_percentage'] = (plan_dict['rebate'] / benchmark * 100) if benchmark else 0
-            
-            plans.append(plan_dict)
-        
-        # First pass: Calculate raw MAC Values for all plans
-        raw_mac_data = []
-        for plan in plans:
-            mac_scores = calculate_mac_value(plan, plans)
-            raw_mac_data.append({
-                'plan': plan,
-                'raw_value_added': mac_scores['value_added_pmpm'],
-                'mac_scores': mac_scores
-            })
-        
-        # Calculate market statistics for proper normalization
-        value_added_amounts = [data['raw_value_added'] for data in raw_mac_data if data['raw_value_added'] is not None]
-        
-        if value_added_amounts and len(value_added_amounts) > 1:
-            max_value = max(value_added_amounts)
-            min_value = min(value_added_amounts)
-            avg_value = sum(value_added_amounts) / len(value_added_amounts)
-            value_range = max_value - min_value
-            
-            # Market-relative scoring
-            def calculate_market_relative_score(value_added):
-                if value_range > 0:
-                    # Normalize to 0-100 based on market position
-                    relative_position = (value_added - min_value) / value_range
-                    # Apply curve to spread scores better
-                    if relative_position >= 0.9:
-                        return 100
-                    elif relative_position >= 0.75:
-                        return 90
-                    elif relative_position >= 0.6:
-                        return 80
-                    elif relative_position >= 0.4:
-                        return 70
-                    elif relative_position >= 0.25:
-                        return 60
-                    elif relative_position >= 0.1:
-                        return 50
-                    else:
-                        return 40
-                else:
-                    return 60  # All same, give middle score
-        else:
-            # Single plan or no valid data
-            def calculate_market_relative_score(value_added):
-                return 60
-        
-        # Second pass: Apply market-relative scoring
-        mac_analysis = []
-        for data in raw_mac_data:
-            plan = data['plan']
-            mac_scores = data['mac_scores']
-            market_relative_score = calculate_market_relative_score(data['raw_value_added'])
-            
-            # Update the MAC value with market-relative score
-            mac_scores['mac_value'] = round(market_relative_score, 1)
-            
-            mac_analysis.append({
-                'organization': plan['organization'],
-                'plan_name': plan['plan_name'],
-                'contract_number': plan['contract_number'],
-                'county': plan['county'],
-                'state': plan['state'],
-                'overall_rating': plan.get('overall_rating', 0),
-                'mac_value': mac_scores['mac_value'],
-                'value_added_pmpm': mac_scores['value_added_pmpm'],
-                'components': mac_scores['components'],
-                'calculation_details': mac_scores.get('calculation_details', {}),
-                'financial_summary': {
-                    'estimated_bid': plan.get('estimated_bid', 0),
-                    'estimated_benchmark': plan.get('estimated_benchmark', 0),
-                    'rebate': plan.get('rebate', 0),
-                    'member_premium': (plan.get('part_c_premium', 0) or 0) + (plan.get('part_d_premium', 0) or 0),
-                    'supplemental_value': plan.get('total_supplemental_value', 0),
-                    'margin_percentage': plan.get('margin_percentage', 0)
-                }
-            })
-        
-        # Sort by MAC Value (highest first)
-        mac_analysis.sort(key=lambda x: x['mac_value'], reverse=True)
+        # Sort by MAC value (highest first)
+        plans.sort(key=lambda x: x.get('mac_value_scores', {}).get('mac_value', 0), reverse=True)
         
         # Calculate market statistics
-        if mac_analysis:
-            mac_values = [plan['mac_value'] for plan in mac_analysis]
+        if plans:
+            mac_values = [plan.get('mac_value_scores', {}).get('mac_value', 0) for plan in plans]
             market_stats = {
-                'total_plans': len(mac_analysis),
-                'average_mac_value': sum(mac_values) / len(mac_values),
-                'highest_mac_value': max(mac_values),
-                'lowest_mac_value': min(mac_values),
-                'market_leader': mac_analysis[0]['organization'] if mac_analysis else None
+                'total_plans': len(plans),
+                'average_mac_value': sum(mac_values) / len(mac_values) if mac_values else 0,
+                'highest_mac_value': max(mac_values) if mac_values else 0,
+                'lowest_mac_value': min(mac_values) if mac_values else 0,
+                'market_leader': plans[0].get('organization') if plans else None
             }
         else:
             market_stats = {
@@ -617,11 +561,10 @@ class APIHandler(http.server.BaseHTTPRequestHandler):
                 'market_leader': None
             }
         
-        conn.close()
         return {
             'status': 'success',
             'market_stats': market_stats,
-            'plans': mac_analysis,
+            'plans': plans,
             'methodology': {
                 'description': 'Milliman MAC (Member Advantage Composite) Value Score',
                 'components': {
@@ -644,17 +587,19 @@ def main():
     
     PORT = 5000
     
-    print("Starting CMS Bid Price Comparison API Server...")
+    print("Starting CMS Bid Price Comparison API Server with MAC Debug Logging...")
     print(f"Database: {DATABASE_PATH}")
     print(f"Server running on http://localhost:{PORT}")
     print("Press Ctrl+C to stop the server")
+    print("\\n*** MAC CALCULATION DEBUG MODE ENABLED ***")
+    print("All MAC calculations will be logged to console for troubleshooting\\n")
     
     try:
         with socketserver.TCPServer(("", PORT), APIHandler) as httpd:
             print(f"Server started successfully at {datetime.now()}")
             httpd.serve_forever()
     except KeyboardInterrupt:
-        print("\nServer stopped by user")
+        print("\\nServer stopped by user")
     except Exception as e:
         print(f"Server error: {str(e)}")
 
